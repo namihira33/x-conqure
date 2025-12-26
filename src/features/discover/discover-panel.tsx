@@ -16,73 +16,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { useAppContext, useAppActions } from "@/store/app-context"
-import { XUser, SCIENCE_COMM_CATEGORIES } from "@/types"
+import { useAppContext } from "@/store/app-context"
+import { useXApi } from "@/hooks/use-x-api"
+import { SCIENCE_COMM_CATEGORIES } from "@/types"
 import {
   Search,
   UserPlus,
   Users,
-  RefreshCw,
   CheckSquare,
   Square,
   Filter,
+  Loader2,
 } from "lucide-react"
-
-// デモ用のモックデータ
-const mockSearchResults: XUser[] = [
-  {
-    id: "101",
-    username: "sci_comm_researcher",
-    name: "科学コミュニケーション研究者",
-    description: "科学コミュニケーションについて研究しています。異分野交流に興味があります。博士課程在籍中。",
-    profileImageUrl: "",
-    followersCount: 2345,
-    followingCount: 890,
-    verified: false,
-    isFollowing: false,
-    isFollowedBy: false,
-  },
-  {
-    id: "102",
-    username: "interdisciplinary_lab",
-    name: "学際研究室",
-    description: "様々な分野の研究者が集まる学際研究室の公式アカウント。サイエンスカフェも定期開催。",
-    profileImageUrl: "",
-    followersCount: 8901,
-    followingCount: 456,
-    verified: true,
-    isFollowing: false,
-    isFollowedBy: false,
-  },
-  {
-    id: "103",
-    username: "stem_student_network",
-    name: "STEM学生ネットワーク",
-    description: "理系学生の交流を促進する学生団体です。イベントや勉強会を企画しています。",
-    profileImageUrl: "",
-    followersCount: 5678,
-    followingCount: 234,
-    verified: false,
-    isFollowing: false,
-    isFollowedBy: true,
-  },
-  {
-    id: "104",
-    username: "outreach_phd",
-    name: "アウトリーチ好きな博士",
-    description: "研究の傍ら、一般向けの科学イベントを企画。サイエンスコミュニケーションに情熱を持っています。",
-    profileImageUrl: "",
-    followersCount: 1234,
-    followingCount: 567,
-    verified: false,
-    isFollowing: false,
-    isFollowedBy: false,
-  },
-]
 
 export function DiscoverPanel() {
   const { state } = useAppContext()
-  const { setSearchResults, addToFollowing, setLoading } = useAppActions()
+  const { searchUsers, batchFollow, isLoading } = useXApi()
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set())
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set())
@@ -90,18 +39,20 @@ export function DiscoverPanel() {
   const [isFollowing, setIsFollowing] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
 
-  // デモ用：実際のデータがない場合はモックを使用
-  const searchResults = state.searchResults.length > 0
-    ? state.searchResults
-    : mockSearchResults
+  const searchResults = state.searchResults
 
-  const handleSearch = () => {
-    setLoading("search", true)
-    // 実際のAPIコールをシミュレート
-    setTimeout(() => {
-      setSearchResults(mockSearchResults)
-      setLoading("search", false)
-    }, 1000)
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return
+
+    // カテゴリも検索クエリに追加
+    let query = searchQuery
+    if (selectedCategories.size > 0) {
+      const categoryTerms = Array.from(selectedCategories).join(" OR ")
+      query = `${searchQuery} (${categoryTerms})`
+    }
+
+    setSelectedUsers(new Set())
+    await searchUsers(query)
   }
 
   const toggleCategory = (category: string) => {
@@ -115,6 +66,9 @@ export function DiscoverPanel() {
   }
 
   const toggleSelectUser = (userId: string) => {
+    const user = searchResults.find(u => u.id === userId)
+    if (user?.isFollowing) return
+
     const newSelected = new Set(selectedUsers)
     if (newSelected.has(userId)) {
       newSelected.delete(userId)
@@ -136,19 +90,14 @@ export function DiscoverPanel() {
     if (selectedUsers.size === 0) return
 
     setIsFollowing(true)
-    const total = selectedUsers.size
-    let completed = 0
+    setFollowProgress(0)
 
-    for (const userId of selectedUsers) {
-      const user = searchResults.find(u => u.id === userId)
-      if (user) {
-        // 実際のAPIコールをシミュレート
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        addToFollowing({ ...user, isFollowing: true })
-        completed++
+    await batchFollow(
+      Array.from(selectedUsers),
+      (completed, total) => {
         setFollowProgress((completed / total) * 100)
       }
-    }
+    )
 
     setSelectedUsers(new Set())
     setIsFollowing(false)
@@ -176,8 +125,12 @@ export function DiscoverPanel() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
-              <Button onClick={handleSearch}>
-                <Search className="h-4 w-4 mr-2" />
+              <Button onClick={handleSearch} disabled={isLoading.search}>
+                {isLoading.search ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Search className="h-4 w-4 mr-2" />
+                )}
                 検索
               </Button>
               <Button
@@ -239,69 +192,79 @@ export function DiscoverPanel() {
           {isFollowing && (
             <div className="mb-4 space-y-2">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <RefreshCw className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
                 フォロー中...
               </div>
               <Progress value={followProgress} />
             </div>
           )}
 
-          <ScrollArea className="h-[400px] pr-4">
-            <div className="space-y-2">
-              {searchResults.map((user) => (
-                <div
-                  key={user.id}
-                  className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
-                    selectedUsers.has(user.id)
-                      ? "bg-primary/5 border-primary/20"
-                      : "hover:bg-muted"
-                  } ${user.isFollowing ? "opacity-50" : ""}`}
-                >
-                  <Checkbox
-                    checked={selectedUsers.has(user.id)}
-                    onCheckedChange={() => toggleSelectUser(user.id)}
-                    disabled={user.isFollowing}
-                  />
-                  <Avatar className="h-10 w-10">
-                    <AvatarImage src={user.profileImageUrl} />
-                    <AvatarFallback>
-                      {user.name.slice(0, 2)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium truncate">{user.name}</span>
-                      {user.verified && (
-                        <Badge variant="secondary" className="text-xs">
-                          認証済み
-                        </Badge>
-                      )}
-                      {user.isFollowing && (
-                        <Badge variant="outline" className="text-xs">
-                          フォロー中
-                        </Badge>
-                      )}
-                      {user.isFollowedBy && (
-                        <Badge className="text-xs">
-                          フォローされています
-                        </Badge>
-                      )}
-                    </div>
-                    <span className="text-sm text-muted-foreground">
-                      @{user.username}
-                    </span>
-                    <p className="text-xs text-muted-foreground truncate mt-1">
-                      {user.description}
-                    </p>
-                  </div>
-                  <div className="text-right text-xs text-muted-foreground">
-                    <div>{user.followersCount.toLocaleString()} フォロワー</div>
-                    <div>{user.followingCount.toLocaleString()} フォロー中</div>
-                  </div>
-                </div>
-              ))}
+          {isLoading.search ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
-          </ScrollArea>
+          ) : searchResults.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              キーワードを入力して検索してください
+            </div>
+          ) : (
+            <ScrollArea className="h-[400px] pr-4">
+              <div className="space-y-2">
+                {searchResults.map((user) => (
+                  <div
+                    key={user.id}
+                    className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+                      selectedUsers.has(user.id)
+                        ? "bg-primary/5 border-primary/20"
+                        : "hover:bg-muted"
+                    } ${user.isFollowing ? "opacity-50" : ""}`}
+                  >
+                    <Checkbox
+                      checked={selectedUsers.has(user.id)}
+                      onCheckedChange={() => toggleSelectUser(user.id)}
+                      disabled={user.isFollowing || isFollowing}
+                    />
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={user.profileImageUrl} />
+                      <AvatarFallback>
+                        {user.name.slice(0, 2)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium truncate">{user.name}</span>
+                        {user.verified && (
+                          <Badge variant="secondary" className="text-xs">
+                            認証済み
+                          </Badge>
+                        )}
+                        {user.isFollowing && (
+                          <Badge variant="outline" className="text-xs">
+                            フォロー中
+                          </Badge>
+                        )}
+                        {user.isFollowedBy && (
+                          <Badge className="text-xs">
+                            フォローされています
+                          </Badge>
+                        )}
+                      </div>
+                      <span className="text-sm text-muted-foreground">
+                        @{user.username}
+                      </span>
+                      <p className="text-xs text-muted-foreground truncate mt-1">
+                        {user.description}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-muted-foreground">
+                      <div>{user.followersCount.toLocaleString()} フォロワー</div>
+                      <div>{user.followingCount.toLocaleString()} フォロー中</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
 
           <div className="mt-4 pt-4 border-t">
             <Button
@@ -309,7 +272,11 @@ export function DiscoverPanel() {
               disabled={selectedUsers.size === 0 || isFollowing}
               className="w-full"
             >
-              <UserPlus className="h-4 w-4 mr-2" />
+              {isFollowing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <UserPlus className="h-4 w-4 mr-2" />
+              )}
               選択したアカウントをフォロー ({selectedUsers.size})
             </Button>
           </div>

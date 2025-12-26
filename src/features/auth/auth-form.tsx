@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -11,11 +11,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { useAppActions } from "@/store/app-context"
-import { KeyRound, Eye, EyeOff, AlertCircle } from "lucide-react"
+import { useAppContext, useAppActions } from "@/store/app-context"
+import { useXApi } from "@/hooks/use-x-api"
+import { saveCredentials, loadCredentials } from "@/lib/storage"
+import { KeyRound, Eye, EyeOff, AlertCircle, Loader2 } from "lucide-react"
 
 export function AuthForm() {
-  const { setCredentials, setAuthenticated, setError } = useAppActions()
+  const { state } = useAppContext()
+  const { setCredentials } = useAppActions()
+  const { verifyCredentials, isLoading, error } = useXApi()
   const [showSecrets, setShowSecrets] = useState(false)
   const [formData, setFormData] = useState({
     apiKey: "",
@@ -25,8 +29,23 @@ export function AuthForm() {
     bearerToken: "",
   })
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [isVerifying, setIsVerifying] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // 保存済み認証情報の読み込み
+  useEffect(() => {
+    const saved = loadCredentials()
+    if (saved) {
+      setFormData({
+        apiKey: saved.apiKey,
+        apiSecret: saved.apiSecret,
+        accessToken: saved.accessToken,
+        accessTokenSecret: saved.accessTokenSecret,
+        bearerToken: saved.bearerToken || "",
+      })
+    }
+  }, [])
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     // バリデーション
@@ -36,15 +55,27 @@ export function AuthForm() {
     }
 
     setValidationError(null)
-    setCredentials({
+    setIsVerifying(true)
+
+    const credentials = {
       apiKey: formData.apiKey,
       apiSecret: formData.apiSecret,
       accessToken: formData.accessToken,
       accessTokenSecret: formData.accessTokenSecret,
       bearerToken: formData.bearerToken || undefined,
-    })
-    setAuthenticated(true)
-    setError(null)
+    }
+
+    // 認証情報を保存してセット
+    setCredentials(credentials)
+    saveCredentials(credentials)
+
+    // API認証を検証
+    const success = await verifyCredentials()
+    setIsVerifying(false)
+
+    if (!success) {
+      setValidationError("認証に失敗しました。認証情報を確認してください。")
+    }
   }
 
   const handleChange = (field: keyof typeof formData) => (
@@ -69,10 +100,10 @@ export function AuthForm() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {validationError && (
+            {(validationError || error) && (
               <div className="flex items-center gap-2 p-3 text-sm text-destructive bg-destructive/10 rounded-md">
                 <AlertCircle className="h-4 w-4" />
-                {validationError}
+                {validationError || error}
               </div>
             )}
 
@@ -84,6 +115,7 @@ export function AuthForm() {
                 placeholder="xxxxxxxxxxxxxxxxxxxxxxxx"
                 value={formData.apiKey}
                 onChange={handleChange("apiKey")}
+                disabled={isVerifying}
               />
             </div>
 
@@ -95,6 +127,7 @@ export function AuthForm() {
                 placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 value={formData.apiSecret}
                 onChange={handleChange("apiSecret")}
+                disabled={isVerifying}
               />
             </div>
 
@@ -106,6 +139,7 @@ export function AuthForm() {
                 placeholder="xxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 value={formData.accessToken}
                 onChange={handleChange("accessToken")}
+                disabled={isVerifying}
               />
             </div>
 
@@ -117,6 +151,7 @@ export function AuthForm() {
                 placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 value={formData.accessTokenSecret}
                 onChange={handleChange("accessTokenSecret")}
+                disabled={isVerifying}
               />
             </div>
 
@@ -128,6 +163,7 @@ export function AuthForm() {
                 placeholder="AAAAAAAAAAAAAAAAAAAAAxxxxxxxxxx..."
                 value={formData.bearerToken}
                 onChange={handleChange("bearerToken")}
+                disabled={isVerifying}
               />
               <p className="text-xs text-muted-foreground">
                 Bearer Tokenは一部の読み取り専用エンドポイントで使用されます
@@ -140,6 +176,7 @@ export function AuthForm() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowSecrets(!showSecrets)}
+                disabled={isVerifying}
               >
                 {showSecrets ? (
                   <>
@@ -155,8 +192,15 @@ export function AuthForm() {
               </Button>
             </div>
 
-            <Button type="submit" className="w-full">
-              認証情報を保存して開始
+            <Button type="submit" className="w-full" disabled={isVerifying}>
+              {isVerifying ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  認証中...
+                </>
+              ) : (
+                "認証情報を保存して開始"
+              )}
             </Button>
           </form>
 

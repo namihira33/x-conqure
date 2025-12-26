@@ -17,11 +17,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { useAppContext } from "@/store/app-context"
+import { useXApi } from "@/hooks/use-x-api"
+import { getTodayQuoteCount, incrementQuoteCount } from "@/lib/storage"
 import { XTweet, QuoteRetweet } from "@/types"
 import {
   Quote,
   Search,
-  RefreshCw,
   Send,
   Calendar,
   Sparkles,
@@ -29,57 +31,9 @@ import {
   MessageCircle,
   Repeat2,
   Heart,
+  Loader2,
+  CheckCircle,
 } from "lucide-react"
-
-// デモ用のモックデータ
-const mockTweetsForQuote: XTweet[] = [
-  {
-    id: "q1",
-    text: "本日開催の異分野交流会、大盛況でした。次回は来月を予定しています。詳細は追ってお知らせします。",
-    authorId: "201",
-    author: {
-      id: "201",
-      username: "cross_field_event",
-      name: "異分野交流イベント",
-      description: "",
-      profileImageUrl: "",
-      followersCount: 3456,
-      followingCount: 234,
-      verified: false,
-      isFollowing: true,
-      isFollowedBy: true,
-    },
-    createdAt: "2024-01-15T18:00:00Z",
-    likeCount: 234,
-    retweetCount: 56,
-    replyCount: 18,
-    isLiked: true,
-    isRetweeted: false,
-  },
-  {
-    id: "q2",
-    text: "サイエンスコミュニケーションの重要性について論文を発表しました。一般市民と研究者の対話促進が鍵です。",
-    authorId: "202",
-    author: {
-      id: "202",
-      username: "sci_comm_journal",
-      name: "サイコミ学会誌",
-      description: "",
-      profileImageUrl: "",
-      followersCount: 12345,
-      followingCount: 567,
-      verified: true,
-      isFollowing: true,
-      isFollowedBy: false,
-    },
-    createdAt: "2024-01-14T12:30:00Z",
-    likeCount: 567,
-    retweetCount: 123,
-    replyCount: 45,
-    isLiked: false,
-    isRetweeted: false,
-  },
-]
 
 // qくんスタイルのコメント生成関数
 const generateQkunComment = (tweet: XTweet, date: Date): string[] => {
@@ -95,17 +49,27 @@ const generateQkunComment = (tweet: XTweet, date: Date): string[] => {
 }
 
 export function QuoteRetweetPanel() {
+  const { state } = useAppContext()
+  const { searchTweets, postQuoteRetweet, isLoading } = useXApi()
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTweet, setSelectedTweet] = useState<XTweet | null>(null)
   const [comment, setComment] = useState("")
   const [useAutoGenerate, setUseAutoGenerate] = useState(true)
   const [generatedComments, setGeneratedComments] = useState<string[]>([])
   const [savedQuotes, setSavedQuotes] = useState<QuoteRetweet[]>([])
-  const [tweets, setTweets] = useState<XTweet[]>(mockTweetsForQuote)
   const [todayQuoteCount, setTodayQuoteCount] = useState(0)
+  const [isPosting, setIsPosting] = useState(false)
+  const [postSuccess, setPostSuccess] = useState<string | null>(null)
 
   const today = new Date()
   const maxDailyQuotes = 3
+
+  const tweets = state.tweetSearchResults
+
+  // 今日の投稿数を取得
+  useEffect(() => {
+    setTodayQuoteCount(getTodayQuoteCount())
+  }, [])
 
   useEffect(() => {
     if (selectedTweet && useAutoGenerate) {
@@ -115,13 +79,14 @@ export function QuoteRetweetPanel() {
     }
   }, [selectedTweet, useAutoGenerate])
 
-  const handleSearch = () => {
-    // 実際のAPIコールをシミュレート
-    setTweets(mockTweetsForQuote)
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return
+    await searchTweets(searchQuery)
   }
 
   const handleSelectTweet = (tweet: XTweet) => {
     setSelectedTweet(tweet)
+    setPostSuccess(null)
   }
 
   const handleSaveQuote = () => {
@@ -134,15 +99,29 @@ export function QuoteRetweetPanel() {
     }
 
     setSavedQuotes(prev => [...prev, newQuote])
-    setTodayQuoteCount(prev => prev + 1)
     setSelectedTweet(null)
     setComment("")
+    setGeneratedComments([])
   }
 
   const handlePostQuote = async (quote: QuoteRetweet) => {
-    // 実際のAPIコールをシミュレート
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    setSavedQuotes(prev => prev.filter(q => q.originalTweet.id !== quote.originalTweet.id))
+    if (todayQuoteCount >= maxDailyQuotes) {
+      return
+    }
+
+    setIsPosting(true)
+    setPostSuccess(null)
+
+    const result = await postQuoteRetweet(quote.originalTweet.id, quote.comment)
+
+    if (result.success) {
+      setSavedQuotes(prev => prev.filter(q => q.originalTweet.id !== quote.originalTweet.id))
+      const newCount = incrementQuoteCount()
+      setTodayQuoteCount(newCount)
+      setPostSuccess(`投稿完了: ${quote.comment.slice(0, 30)}...`)
+    }
+
+    setIsPosting(false)
   }
 
   const handleDeleteQuote = (tweetId: string) => {
@@ -199,6 +178,13 @@ export function QuoteRetweetPanel() {
               />
             </div>
           </div>
+
+          {postSuccess && (
+            <div className="mt-4 p-3 bg-green-500/10 text-green-600 rounded-lg flex items-center gap-2">
+              <CheckCircle className="h-4 w-4" />
+              {postSuccess}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -216,58 +202,72 @@ export function QuoteRetweetPanel() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
-              <Button onClick={handleSearch} size="sm">
-                <Search className="h-4 w-4" />
+              <Button onClick={handleSearch} size="sm" disabled={isLoading.search}>
+                {isLoading.search ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Search className="h-4 w-4" />
+                )}
               </Button>
             </div>
 
-            <ScrollArea className="h-[300px]">
-              <div className="space-y-3">
-                {tweets.map((tweet) => (
-                  <div
-                    key={tweet.id}
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                      selectedTweet?.id === tweet.id
-                        ? "bg-primary/5 border-primary/20"
-                        : "hover:bg-muted"
-                    }`}
-                    onClick={() => handleSelectTweet(tweet)}
-                  >
-                    <div className="flex items-start gap-2">
-                      <Avatar className="h-8 w-8">
-                        <AvatarImage src={tweet.author?.profileImageUrl} />
-                        <AvatarFallback className="text-xs">
-                          {tweet.author?.name.slice(0, 2)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1 mb-1">
-                          <span className="font-medium text-sm">{tweet.author?.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            @{tweet.author?.username}
-                          </span>
-                        </div>
-                        <p className="text-sm line-clamp-2">{tweet.text}</p>
-                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <MessageCircle className="h-3 w-3" />
-                            {tweet.replyCount}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Repeat2 className="h-3 w-3" />
-                            {tweet.retweetCount}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Heart className="h-3 w-3" />
-                            {tweet.likeCount}
-                          </span>
+            {isLoading.search ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : tweets.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground text-sm">
+                キーワードを入力して検索してください
+              </div>
+            ) : (
+              <ScrollArea className="h-[300px]">
+                <div className="space-y-3">
+                  {tweets.map((tweet) => (
+                    <div
+                      key={tweet.id}
+                      className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                        selectedTweet?.id === tweet.id
+                          ? "bg-primary/5 border-primary/20"
+                          : "hover:bg-muted"
+                      }`}
+                      onClick={() => handleSelectTweet(tweet)}
+                    >
+                      <div className="flex items-start gap-2">
+                        <Avatar className="h-8 w-8">
+                          <AvatarImage src={tweet.author?.profileImageUrl} />
+                          <AvatarFallback className="text-xs">
+                            {tweet.author?.name.slice(0, 2)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1 mb-1">
+                            <span className="font-medium text-sm">{tweet.author?.name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              @{tweet.author?.username}
+                            </span>
+                          </div>
+                          <p className="text-sm line-clamp-2">{tweet.text}</p>
+                          <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <MessageCircle className="h-3 w-3" />
+                              {tweet.replyCount}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Repeat2 className="h-3 w-3" />
+                              {tweet.retweetCount}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Heart className="h-3 w-3" />
+                              {tweet.likeCount}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
           </CardContent>
         </Card>
 
@@ -321,16 +321,17 @@ export function QuoteRetweetPanel() {
                   />
                   <div className="flex justify-between text-xs text-muted-foreground">
                     <span>qくんキャラ: 好奇心旺盛、前向き、学生団体代表</span>
-                    <span>{comment.length} / 280</span>
+                    <span className={comment.length > 280 ? "text-destructive" : ""}>
+                      {comment.length} / 280
+                    </span>
                   </div>
                 </div>
 
                 <Button
                   onClick={handleSaveQuote}
-                  disabled={!comment || todayQuoteCount >= maxDailyQuotes}
+                  disabled={!comment || comment.length > 280 || todayQuoteCount >= maxDailyQuotes}
                   className="w-full"
                 >
-                  <RefreshCw className="h-4 w-4 mr-2" />
                   下書きに保存
                 </Button>
               </div>
@@ -377,8 +378,13 @@ export function QuoteRetweetPanel() {
                       <Button
                         size="sm"
                         onClick={() => handlePostQuote(quote)}
+                        disabled={isPosting || todayQuoteCount >= maxDailyQuotes}
                       >
-                        <Send className="h-4 w-4 mr-2" />
+                        {isPosting ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4 mr-2" />
+                        )}
                         投稿する
                       </Button>
                     </div>
